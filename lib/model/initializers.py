@@ -13,6 +13,12 @@ from keras import backend as K
 from keras import initializers
 from keras.utils.generic_utils import get_custom_objects
 
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True  # 不全部占满显存, 按需分配
+session = tf.Session(config=config)
+# 设置session
+K.set_session(session)
+
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 
@@ -25,13 +31,18 @@ def icnr_keras(shape, dtype=None):
     # TODO Roll this into ICNR_init when porting GAN 2.2
     shape = list(shape)
     scale = 2
+    # 按正态分布生成均值为0， 标准差为0.02的一个初始化器
     initializer = tf.keras.initializers.RandomNormal(0, 0.02)
 
     new_shape = shape[:3] + [int(shape[3] / (scale ** 2))]
     var_x = initializer(new_shape, dtype)
+    # 图像维度变换
     var_x = tf.transpose(var_x, perm=[2, 0, 1, 3])
+    # 使用最近邻插值调整images为size
     var_x = tf.image.resize_nearest_neighbor(var_x, size=(shape[0] * scale, shape[1] * scale))
+    # 将channels转变为channels * block_size * block_size,依次向上兼并
     var_x = tf.space_to_depth(var_x, block_size=scale)
+    # 图像维度变换
     var_x = tf.transpose(var_x, perm=[1, 2, 0, 3])
     return var_x
 
@@ -62,9 +73,11 @@ class ICNR(initializers.Initializer):  # pylint: disable=invalid-name
             return self.initializer(shape)
         new_shape = shape[:3] + [shape[3] // (self.scale ** 2)]
         if isinstance(self.initializer, dict):
+            # 反序列化
             self.initializer = initializers.deserialize(self.initializer)
         var_x = self.initializer(new_shape, dtype)
         var_x = tf.transpose(var_x, perm=[2, 0, 1, 3])
+        # 使用最近邻插值调整images为size，输入和输出张量的4个角像素的中心对齐,并保留角落像素处的值
         var_x = tf.image.resize_nearest_neighbor(
             var_x,
             size=(shape[0] * self.scale, shape[1] * self.scale),
@@ -105,7 +118,9 @@ class ConvolutionAware(initializers.Initializer):
         self._init = init
         self.eps_std = eps_std
         self.seed = seed
+        # 生成一个随机正交矩阵的初始化器
         self.orthogonal = initializers.Orthogonal()
+        # He 正态分布初始化器
         self.he_uniform = initializers.he_uniform()
 
     def __call__(self, shape, dtype=None):
@@ -122,6 +137,7 @@ class ConvolutionAware(initializers.Initializer):
         if self.seed is not None:
             np.random.seed(self.seed)
 
+        #计算输入范围的数量
         fan_in, _ = initializers._compute_fans(shape)  # pylint:disable=protected-access
         variance = 2 / fan_in
 
@@ -179,11 +195,13 @@ class ConvolutionAware(initializers.Initializer):
         for _ in range(nbb):
             var_a = np.random.normal(0.0, 1.0, (size, size))
             var_a = self._symmetrize(var_a)
+            # 计算奇异值
             var_u, _, _ = np.linalg.svd(var_a)
             lst.extend(var_u.T.tolist())
         var_p = np.array(lst[:filters], dtype=dtype)
         return var_p
 
+    # 对称化
     @staticmethod
     def _symmetrize(var_a):
         return var_a + var_a.T - np.diag(var_a.diagonal())

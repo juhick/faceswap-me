@@ -2,7 +2,12 @@
 """ The master faceswap.py script """
 import sys
 
+import os
+
 import lib.cli as cli
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 
 if sys.version_info[0] < 3:
     raise Exception("This program requires at least python3.2")
